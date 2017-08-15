@@ -31,7 +31,7 @@ struct Measurement
     float grayscale;    
 };
 
-//根据小孔成像模型反推，2D点到3D点的变换
+//根据小孔成像模型反推，2D点到3D点的变换,并且声明为内联函数，可以直接引用
 inline Eigen::Vector3d project2Dto3D( int x, int y, int d, float fx, float fy, float cx, float cy, float scale)
 {
     float zz = float (d) / scale;
@@ -41,7 +41,7 @@ inline Eigen::Vector3d project2Dto3D( int x, int y, int d, float fx, float fy, f
     return Eigen::Vector3d (xx,yy,zz);
 }
 
-//根据小孔成像模型，3D点到2D点的变换
+//根据小孔成像模型，3D点到2D点的变换,并且声明为内联函数，可以直接引用
 inline Eigen::Vector2d project3Dto2D( float x, float y,float z, float fx, float fy, float cx, float cy)
 {
     float u = fx * x / z + cx;
@@ -69,9 +69,10 @@ public:
     
     EdgeSE3ProjectDirect( Eigen::Vector3d point, float fx,float fy, float cx, float cy, cv::Mat* image) : x_world_( point ),fx_( fx ), fy_( fy ),cx_( cx ), cy_( cy ), image_ ( image ) {}   //构造函数2，参数是一个3D点坐标，相机内参，cv的图象
     
-    virtual  void computeError() //计算误差，虚函数
+    virtual  void computeError() //计算误差，重写了computeError虚函数
     {
-        const VertexSE3Expmap* v = static_cast<const VertexSE3Expmap*> (_vertices[0]) ;//定义一个相机位姿的变换
+        const VertexSE3Expmap* v = static_cast<const VertexSE3Expmap*> (_vertices[0]) ;//定义一个相机位姿的变换,这个就是被估计量，被优化量
+        
         Eigen::Vector3d x_local = v->estimate().map (x_world_);
         
         float x = x_local[0] * fx_ / x_local[2] + cx_;
@@ -200,13 +201,14 @@ int main(int argc,char ** argv)
     Eigen::Matrix3f K;
     K<<fx,0.f,cx,0.f,fy,cy,0.f,0.f,1.0f;//内参矩阵
 
+    //欧式变换矩阵使用Eigen::Isometry3d，实际是一个4*4矩阵
     Eigen::Isometry3d Tcw = Eigen::Isometry3d::Identity();
     /*定义了Tcw为Isometry3d类型的旋转
     Isometry
       A transformation that is invariant with respect to distance. That is, the distance between any two points in the pre-image must be the same as the distance between the images of the two points.
     */
     
-    cv::Mat prev_color;
+    cv::Mat prev_color;//前一张图片
     
     
     // 对十张图片作直接法估计位姿，我们以第一个图像为参考，对后续图像和参考图像做稀疏直接法
@@ -220,7 +222,7 @@ int main(int argc,char ** argv)
         
         if( color.data ==nullptr || depth.data== nullptr)
             continue;
-        cv::cvtColor(color,gray,cv::COLOR_BGR2GRAY);//将BGR图片转化为灰度图
+        cv::cvtColor(color,gray,cv::COLOR_BGR2GRAY);//将BGR图片转化为灰度图，源地址是color，存在gray中
         if( index == 0)
         {
             
@@ -250,7 +252,7 @@ int main(int argc,char ** argv)
                     continue;
                 }
                 
-                Eigen::Vector3d p3d = project2Dto3D ( kp.pt.x, kp.pt.y, d, fx, fy, cx, cy, depth_scale);
+                Eigen::Vector3d p3d = project2Dto3D ( kp.pt.x, kp.pt.y, d, fx, fy, cx, cy, depth_scale);//depth_scale相当与一个归一化的值，使得尺度协调
                 float grayscale = float ( gray.ptr<uchar> (cvRound( kp.pt.y))  [ cvRound( kp.pt.x ) ] );//获取这个点的灰度值
                 measurements.push_back ( Measurement ( p3d , grayscale) );//向measurements中加入这个点
                 
@@ -264,8 +266,15 @@ int main(int argc,char ** argv)
         
         chrono::steady_clock::time_point t1 = chrono::steady_clock::now();
         
-        //使用直接法计算相机运动
+        /*******使用直接法计算相机运动
+         *          **************  
+         *          ** 核心算法   **
+         *          **************
+         */
+        
         poseEstimationDirect( measurements, &gray , K ,Tcw );
+        
+        
         
         chrono::steady_clock::time_point t2 = chrono::steady_clock::now();
         
@@ -275,12 +284,12 @@ int main(int argc,char ** argv)
         cout<<"Tcw="<<Tcw.matrix() <<endl;
         
         //在图中进行plot标注
-        cv::Mat img_show ( color.rows*2 , color.cols , CV_8UC3 );
-        prev_color.copyTo (img_show ( cv::Rect ( 0,0,color.cols,color.rows)));
-        color.copyTo( img_show ( cv::Rect ( 0, color.rows, color.cols, color.rows )));
+        cv::Mat img_show ( color.rows*2 , color.cols , CV_8UC3 );//显示上下两张图片的摆放
+        prev_color.copyTo (img_show ( cv::Rect ( 0,0,color.cols,color.rows)));//画出上面的图
+        color.copyTo( img_show ( cv::Rect ( 0, color.rows, color.cols, color.rows )));//画出下面的图
         for( Measurement m:measurements )//对提取的特征点作标注
         {
-            if( rand()> RAND_MAX/5 )  //生成随机数
+            if( rand()> RAND_MAX/5 )  //生成随机数，用随机的颜色标注角点
                 continue;
             Eigen::Vector3d p = m.pos_world;
             Eigen::Vector2d pixel_prev = project3Dto2D ( p (0,0), p (1,0), p (2,0),   fx, fy, cx, cy );
@@ -294,8 +303,10 @@ int main(int argc,char ** argv)
             float g = 255* float (rand()) / RAND_MAX;
             float r = 255* float (rand()) / RAND_MAX;
             
+            //在上下两张图同意角点周围各画一个圆
             cv::circle ( img_show, cv::Point2d ( pixel_prev (0,0),  pixel_prev (1,0) ),             8 , cv::Scalar (b,g,r), 2 );
             cv::circle ( img_show, cv::Point2d ( pixel_now  (0,0),  pixel_now (1,0) + color.rows),  8 , cv::Scalar (b,g,r), 2);
+            //用直线将两个圆连接起来
             cv::line   ( img_show, cv::Point2d ( pixel_prev (0,0),  pixel_prev (1,0) ), cv::Point2d ( pixel_now  (0,0),  pixel_now (1,0) + color.rows), cv::Scalar (b,g,r), 1);
             
         }
@@ -326,7 +337,7 @@ bool poseEstimationDirect ( const vector<Measurement>& measurements, cv::Mat* gr
     DirectBlock* solver_ptr = new DirectBlock( linearSolver ) ;
     //矩阵块求解器
     
-    g2o::OptimizationAlgorithmLevenberg* slover = new g2o::OptimizationAlgorithmLevenberg(solver_ptr) ; 
+    g2o::OptimizationAlgorithmLevenberg* slover = new g2o::OptimizationAlgorithmLevenberg(solver_ptr); 
     //使用LM迭代策略
     
     g2o::SparseOptimizer optimizer;   //图模型
@@ -336,7 +347,7 @@ bool poseEstimationDirect ( const vector<Measurement>& measurements, cv::Mat* gr
     //添加顶点，位姿是顶点，是需要被优化的变量
     g2o::VertexSE3Expmap* pose = new g2o::VertexSE3Expmap();
     pose->setEstimate ( g2o::SE3Quat ( Tcw.rotation(),Tcw.translation() ) );
-    //被估计的是SE3的旋转矩阵，平移矩阵的四元数表示方法？？？
+    //Tcw.rotation() 返回欧式变换矩阵的旋转部分，   被估计的是SE3的旋转矩阵，平移矩阵的四元数表示方法？？？
     pose->setId(0);
     optimizer.addVertex( pose );
     
@@ -344,10 +355,8 @@ bool poseEstimationDirect ( const vector<Measurement>& measurements, cv::Mat* gr
     int id = 1;
     for (Measurement m : measurements)//把measurements中所有的已有数据都建立起很多条边到一个点的图
     {
-        EdgeSE3ProjectDirect* edge = new EdgeSE3ProjectDirect(
-            m.pos_world,
-            K (0,0) , K (1,1) ,  K (0,2) ,  K (1,2) , gray
-        );//根据已经定义的边的类，实例化一条边，并有初始化列表，
+        EdgeSE3ProjectDirect* edge = new EdgeSE3ProjectDirect(m.pos_world,K(0,0),K(1,1),K(0,2),K(1,2),gray);
+        //根据已经定义的边的类，实例化一条边，并有初始化列表，
         edge->setVertex(0,pose);//设置连接的顶点
         edge->setMeasurement(m.grayscale);//观测数值
         edge->setInformation( Eigen::Matrix<double,1,1>::Identity() );//信息矩阵，协方差矩阵之逆

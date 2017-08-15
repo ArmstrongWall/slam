@@ -1,0 +1,7 @@
+[
+{
+  "directory": "/home/wzq/slam/vslam/directslam_learning/directMethod/build",
+  "command": "/usr/bin/c++    -isystem /opt/ros/kinetic/include/opencv-3.2.0-dev -isystem /opt/ros/kinetic/include/opencv-3.2.0-dev/opencv -I/usr/include/eigen3  -std=c++11 -O3 -g   -o CMakeFiles/direct_semidense.dir/direct_semidense.cpp.o -c /home/wzq/slam/vslam/directslam_learning/directMethod/direct_semidense.cpp",
+  "file": "/home/wzq/slam/vslam/directslam_learning/directMethod/direct_semidense.cpp"
+}
+]
